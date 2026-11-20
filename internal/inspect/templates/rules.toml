@@ -19,7 +19,7 @@ pass = "✔"
 fail = "There is at least one unused index"
 
 [[rules]]
-query = "SELECT LISTAGG(name, ',') AS match FROM `db_stats.csv` WHERE index_hit_rate < 0.94 OR table_hit_rate < 0.94"
+query = "SELECT LISTAGG(index_hit_rate, ',') AS match FROM `db_stats.csv` WHERE index_hit_rate < 0.94 OR table_hit_rate < 0.94"
 name = "Check cache hit is within acceptable bounds"
 pass = "✔"
 fail = "There is a cache hit ratio (table or index) below 94%"

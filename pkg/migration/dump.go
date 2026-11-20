@@ -169,7 +169,7 @@ func DumpSchema(ctx context.Context, config pgconn.Config, w io.Writer, exec Exe
 	if !opt.keepComments {
 		env = append(env, "EXTRA_SED=/^--/d")
 	}
-	return exec(ctx, dumpSchemaScript, env, w)
+	return exec(ctx, normalizeScript(dumpSchemaScript), env, w)
 }
 
 func DumpData(ctx context.Context, config pgconn.Config, w io.Writer, exec ExecFunc, opts ...DumpOptionFunc) error {
@@ -195,7 +195,7 @@ func DumpData(ctx context.Context, config pgconn.Config, w io.Writer, exec ExecF
 	if len(extraFlags) > 0 {
 		env = append(env, "EXTRA_FLAGS="+strings.Join(extraFlags, " "))
 	}
-	return exec(ctx, dumpDataScript, env, w)
+	return exec(ctx, normalizeScript(dumpDataScript), env, w)
 }
 
 func quoteUpperCase(table string) string {
@@ -215,5 +215,9 @@ func DumpRole(ctx context.Context, config pgconn.Config, w io.Writer, exec ExecF
 	if !opt.keepComments {
 		env = append(env, "EXTRA_SED=/^--/d")
 	}
-	return exec(ctx, dumpRoleScript, env, w)
+	return exec(ctx, normalizeScript(dumpRoleScript), env, w)
+}
+
+func normalizeScript(script string) string {
+	return strings.ReplaceAll(script, "\r\n", "\n")
 }

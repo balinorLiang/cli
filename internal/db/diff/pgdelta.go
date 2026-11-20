@@ -69,7 +69,7 @@ EOF
 		"",
 		stdout,
 		&stderr,
-	); err != nil && !strings.HasPrefix(stderr.String(), "main worker has been destroyed") {
+	); err != nil && !strings.Contains(stderr.String(), "main worker has been destroyed") {
 		return errors.Errorf("error diffing schema: %w:\n%s", err, stderr.String())
 	}
 	return nil

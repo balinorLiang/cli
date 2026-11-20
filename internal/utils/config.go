@@ -12,6 +12,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/spf13/afero"
 	"github.com/spf13/viper"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/pkg/config"
 )
 
@@ -222,6 +223,9 @@ type InitParams struct {
 func InitConfig(params InitParams, fsys afero.Fs) error {
 	c := config.NewConfig()
 	c.ProjectId = params.ProjectId
+	if highgobase.Enabled() {
+		highgobase.Apply(config.Config(&c))
+	}
 	if params.UseOrioleDB {
 		c.Experimental.OrioleDBVersion = "15.1.0.150"
 	}

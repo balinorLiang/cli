@@ -140,7 +140,9 @@ func TestMigrateShadow(t *testing.T) {
 			Query(sql).
 			Reply("CREATE SCHEMA").
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		// Run test
 		err := MigrateShadowDatabase(context.Background(), "test-shadow-db", fsys, conn.Intercept)
 		// Check error
@@ -319,7 +321,9 @@ create schema public`)
 			Query(sql).
 			Reply("CREATE SCHEMA").
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		// Run test
 		diff, err := DiffDatabase(context.Background(), []string{"public"}, dbConfig, io.Discard, fsys, DiffSchemaMigra, func(cc *pgx.ConnConfig) {
 			if cc.Host == dbConfig.Host {

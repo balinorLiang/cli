@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/tidwall/jsonc"
 )
@@ -37,7 +38,7 @@ func Run(ctx context.Context, fsys afero.Fs, interactive bool, params utils.Init
 	// 1. Write `config.toml`.
 	if err := utils.InitConfig(params, fsys); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			utils.CmdSuggestion = fmt.Sprintf("Run %s to overwrite existing config file.", utils.Aqua("supabase init --force"))
+			utils.CmdSuggestion = fmt.Sprintf("Run %s to overwrite existing config file.", utils.Aqua(highgobase.CommandName()+" init --force"))
 		}
 		return err
 	}

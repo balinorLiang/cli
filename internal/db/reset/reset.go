@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
 	"github.com/supabase/cli/internal/db/start"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/migration/apply"
 	"github.com/supabase/cli/internal/migration/down"
 	"github.com/supabase/cli/internal/migration/list"
@@ -73,12 +74,15 @@ func Run(ctx context.Context, version string, last uint, config pgconn.Config, f
 		}
 	}
 	branch := utils.GetGitBranch(fsys)
-	fmt.Fprintln(os.Stderr, "Finished "+utils.Aqua("supabase db reset")+" on branch "+utils.Aqua(branch)+".")
+	fmt.Fprintln(os.Stderr, "Finished "+utils.Aqua(highgobase.CommandName()+" db reset")+" on branch "+utils.Aqua(branch)+".")
 	return nil
 }
 
 func resetDatabase(ctx context.Context, version string, fsys afero.Fs, options ...func(*pgx.ConnConfig)) error {
 	fmt.Fprintln(os.Stderr, "Resetting local database"+toLogMessage(version))
+	if highgobase.Enabled() {
+		return resetDatabase15(ctx, version, fsys, options...)
+	}
 	if utils.Config.Db.MajorVersion <= 14 {
 		return resetDatabase14(ctx, version, fsys, options...)
 	}
@@ -111,6 +115,11 @@ func resetDatabase14(ctx context.Context, version string, fsys afero.Fs, options
 }
 
 func resetDatabase15(ctx context.Context, version string, fsys afero.Fs, options ...func(*pgx.ConnConfig)) error {
+	if highgobase.Enabled() {
+		if err := highgobase.ValidateHome(); err != nil {
+			return err
+		}
+	}
 	if err := utils.Docker.ContainerRemove(ctx, utils.DbId, container.RemoveOptions{Force: true}); err != nil {
 		return errors.Errorf("failed to remove container: %w", err)
 	}

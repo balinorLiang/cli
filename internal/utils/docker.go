@@ -33,6 +33,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/go-errors/errors"
 	"github.com/spf13/viper"
+	"github.com/supabase/cli/internal/highgobase"
 	"go.opentelemetry.io/otel"
 )
 
@@ -189,6 +190,9 @@ const defaultRegistry = "public.ecr.aws"
 func GetRegistry() string {
 	registry := viper.GetString("INTERNAL_IMAGE_REGISTRY")
 	if len(registry) == 0 {
+		if highgobase.Enabled() {
+			return "docker.io"
+		}
 		return defaultRegistry
 	}
 	return strings.ToLower(registry)
@@ -244,12 +248,30 @@ func DockerPullImageIfNotCached(ctx context.Context, imageName string) error {
 	} else if !errdefs.IsNotFound(err) {
 		return errors.Errorf("failed to inspect docker image: %w", err)
 	}
-	return DockerImagePullWithRetry(ctx, imageUrl, 2)
+	if err := DockerImagePullWithRetry(ctx, imageUrl, 2); err != nil {
+		if highgobase.Enabled() {
+			CmdSuggestion = highgobase.ImageSuggestion()
+		}
+		return err
+	}
+	return nil
 }
 
 var suggestDockerInstall = "Docker Desktop is a prerequisite for local development. Follow the official docs to install: https://docs.docker.com/desktop"
 
 func DockerStart(ctx context.Context, config container.Config, hostConfig container.HostConfig, networkingConfig network.NetworkingConfig, containerName string) (string, error) {
+	if highgobase.Enabled() && config.Image == Config.Studio.Image {
+		config.Env = append(config.Env,
+			"POSTGRES_HOST="+DbId,
+			"POSTGRES_PORT=5432",
+			"POSTGRES_DB=postgres",
+			"POSTGRES_USER=postgres",
+			"CONNECT_DIRECT_HOST="+Config.Hostname,
+			fmt.Sprintf("CONNECT_DIRECT_PORT=%d", Config.Db.Port),
+			"CONNECT_DIRECT_DATABASE=postgres",
+			"CONNECT_DIRECT_USER=postgres",
+		)
+	}
 	// Pull container image
 	if err := DockerPullImageIfNotCached(ctx, config.Image); err != nil {
 		if client.IsErrConnectionFailed(err) {

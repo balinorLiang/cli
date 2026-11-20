@@ -70,8 +70,22 @@ func TestInitConfig(t *testing.T) {
 		exists, err := afero.Exists(fsys, ConfigPath)
 		assert.NoError(t, err)
 		assert.True(t, exists)
+		content, err := afero.ReadFile(fsys, ConfigPath)
+		assert.NoError(t, err)
+		assert.Contains(t, string(content), "major_version = 17")
 	})
 
+	t.Run("creates HighgoBase config", func(t *testing.T) {
+		t.Setenv("HIGHGOBASE", "1")
+
+		fsys := afero.NewMemMapFs()
+		err := InitConfig(InitParams{ProjectId: "test-project"}, fsys)
+
+		assert.NoError(t, err)
+		content, err := afero.ReadFile(fsys, ConfigPath)
+		assert.NoError(t, err)
+		assert.Contains(t, string(content), "major_version = 14")
+	})
 	t.Run("creates config with orioledb", func(t *testing.T) {
 		fsys := afero.NewMemMapFs()
 		params := InitParams{

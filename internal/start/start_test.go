@@ -181,6 +181,15 @@ func TestDatabaseStart(t *testing.T) {
 					},
 				}})
 		}
+		gock.New(utils.Docker.DaemonHost()).
+			Get("/v" + utils.Docker.ClientVersion() + "/containers/" + utils.KongId + "/json").
+			Reply(http.StatusOK).
+			JSON(container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+				State: &container.State{
+					Running: true,
+					Health:  &container.Health{Status: types.Healthy},
+				},
+			}})
 		gock.New(utils.Config.Api.ExternalUrl).
 			Head("/rest-admin/v1/ready").
 			Reply(http.StatusOK)

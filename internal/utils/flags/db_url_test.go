@@ -39,6 +39,19 @@ func TestParseDatabaseConfig(t *testing.T) {
 		assert.Equal(t, "app", DbConfig.Database)
 	})
 
+	t.Run("preserves sslmode for direct connection", func(t *testing.T) {
+		flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		flagSet.String("db-url", "", "")
+		err := flagSet.Set("db-url", "postgres://postgres:password@db.example.com:5432/postgres?sslmode=disable")
+		require.NoError(t, err)
+
+		err = ParseDatabaseConfig(context.Background(), flagSet, afero.NewMemMapFs())
+
+		require.NoError(t, err)
+		assert.Equal(t, "disable", DbConfig.RuntimeParams["sslmode"])
+		assert.Contains(t, utils.ToPostgresURL(DbConfig), "sslmode=disable")
+	})
+
 	t.Run("parses local connection", func(t *testing.T) {
 		flagSet := pflag.NewFlagSet("test", pflag.ContinueOnError)
 		flagSet.Bool("local", false, "")

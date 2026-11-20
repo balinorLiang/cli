@@ -8,6 +8,7 @@ import (
 
 	"github.com/docker/docker/api/types/volume"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/internal/utils/flags"
 )
@@ -32,7 +33,7 @@ func Run(ctx context.Context, backup bool, projectId string, all bool, fsys afer
 		return err
 	}
 
-	fmt.Println("Stopped " + utils.Aqua("supabase") + " local development setup.")
+	fmt.Println("Stopped " + utils.Aqua(highgobase.CommandName()) + " local development setup.")
 	if resp, err := utils.Docker.VolumeList(ctx, volume.ListOptions{
 		Filters: utils.CliProjectFilter(searchProjectIdFilter),
 	}); err == nil && len(resp.Volumes) > 0 {

@@ -3,9 +3,13 @@ error_log logs/error.log ${{LOG_LEVEL}}; # can be set by kong.conf
 
 daemon ${{NGINX_DAEMON}};                     # can be set by kong.conf
 worker_processes ${{NGINX_WORKER_PROCESSES}}; # can be set by kong.conf
+user kong kong;
+worker_rlimit_nofile 1024;
+include 'nginx-inject.conf';
 
 events {
     multi_accept on;
+    worker_connections 1024;
 }
 
 http {
@@ -20,7 +24,7 @@ http {
 
         location /email {
             autoindex on;
-            root /home/kong/templates;
+            root /tmp/kong/templates;
         }
     }
 

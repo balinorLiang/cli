@@ -16,6 +16,12 @@ var (
 		GroupID: groupManagementAPI,
 		Use:     "storage",
 		Short:   "Manage Supabase Storage objects",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if local, err := cmd.Flags().GetBool("local"); err == nil && local {
+				cmd.GroupID = groupLocalDev
+			}
+			return cmd.Root().PersistentPreRunE(cmd, args)
+		},
 	}
 
 	recursive bool

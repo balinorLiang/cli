@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -64,6 +65,16 @@ func ParseDatabaseConfig(ctx context.Context, flagSet *pflag.FlagSet, fsys afero
 			config, err := pgconn.ParseConfig(flag.Value.String())
 			if err != nil {
 				return errors.Errorf("failed to parse connection string: %w", err)
+			}
+			// pgconn stores sslmode in TLSConfig, which ToPostgresURL cannot
+			// recover. Preserve explicit modes so remote HGDB without TLS works.
+			if parsed, err := url.Parse(flag.Value.String()); err == nil {
+				if sslmode := parsed.Query().Get("sslmode"); len(sslmode) > 0 {
+					if config.RuntimeParams == nil {
+						config.RuntimeParams = map[string]string{}
+					}
+					config.RuntimeParams["sslmode"] = sslmode
+				}
 			}
 			DbConfig = *config
 		}

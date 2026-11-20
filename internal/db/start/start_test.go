@@ -6,11 +6,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/go-connections/nat"
 	"github.com/h2non/gock"
 	"github.com/spf13/afero"
 	"github.com/stretchr/testify/assert"
@@ -359,4 +361,34 @@ func TestStartDatabaseWithCustomSettings(t *testing.T) {
 		config := NewContainerConfig()
 		assert.Contains(t, config.Entrypoint[2], "max_connections = 50")
 	})
+}
+
+func TestHighgoBaseContainerConfig(t *testing.T) {
+	t.Setenv("HIGHGOBASE", "1")
+	oldPassword := utils.Config.Db.Password
+	oldMaxConnections := utils.Config.Db.Settings.MaxConnections
+	t.Cleanup(func() {
+		utils.Config.Db.Password = oldPassword
+		utils.Config.Db.Settings.MaxConnections = oldMaxConnections
+	})
+	utils.Config.Db.Password = "hgdb-secret"
+	utils.Config.Db.Settings.MaxConnections = cast.Ptr(uint(50))
+
+	config := NewContainerConfig()
+	assert.Equal(t, utils.Config.Db.Image, config.Image)
+	assert.Contains(t, config.Env, "HGDB_PASSWORD=hgdb-secret")
+	assert.Contains(t, config.Env, "POSTGRES_PORT=5866")
+	assert.Contains(t, config.Env, "POSTGRES_USER=postgres")
+	assert.Equal(t, "postgres", config.Cmd[0])
+	assert.Contains(t, strings.Join(config.Cmd, " "), "-c port=5432")
+	assert.Contains(t, strings.Join(config.Cmd, " "), "shared_preload_libraries=")
+	assert.Contains(t, strings.Join(config.Cmd, " "), "max_connections=50")
+	assert.Contains(t, strings.Join(config.Entrypoint, " "), "/usr/local/bin/docker-entrypoint.sh")
+
+	hostConfig := NewHostConfig()
+	bindings := hostConfig.PortBindings[nat.Port("5432/tcp")]
+	assert.Len(t, bindings, 1)
+	assert.NotEmpty(t, bindings[0].HostPort)
+	assert.Contains(t, strings.Join(hostConfig.Binds, "\n"), ":/home/highgo/data")
+	assert.Contains(t, strings.Join(hostConfig.Binds, "\n"), ":/hgbase:ro")
 }

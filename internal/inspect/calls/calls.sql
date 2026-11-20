@@ -21,6 +21,6 @@ SELECT
       )
     )
   )::text AS sync_io_time
-FROM extensions.pg_stat_statements s
+FROM pg_stat_statements s
 ORDER BY calls DESC
 LIMIT 10

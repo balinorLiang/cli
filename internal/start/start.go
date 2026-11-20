@@ -36,6 +36,7 @@ import (
 
 	"github.com/supabase/cli/internal/db/start"
 	"github.com/supabase/cli/internal/functions/serve"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/seed/buckets"
 	"github.com/supabase/cli/internal/services"
 	"github.com/supabase/cli/internal/status"
@@ -50,8 +51,13 @@ func Run(ctx context.Context, fsys afero.Fs, excludedContainers []string, ignore
 		if err := flags.LoadConfig(fsys); err != nil {
 			return err
 		}
+		if highgobase.Enabled() {
+			if err := highgobase.ValidateHome(); err != nil {
+				return err
+			}
+		}
 		if err := utils.AssertSupabaseDbIsRunning(); err == nil {
-			fmt.Fprintln(os.Stderr, utils.Aqua("supabase start")+" is already running.")
+			fmt.Fprintln(os.Stderr, utils.Aqua(highgobase.CommandName()+" start")+" is already running.")
 			names := status.CustomName{}
 			return status.Run(ctx, names, utils.OutputPretty, fsys)
 		} else if !errors.Is(err, utils.ErrNotRunning) {
@@ -80,7 +86,7 @@ func Run(ctx context.Context, fsys afero.Fs, excludedContainers []string, ignore
 		}
 	}
 
-	fmt.Fprintf(os.Stderr, "Started %s local development setup.\n\n", utils.Aqua("supabase"))
+	fmt.Fprintf(os.Stderr, "Started %s local development setup.\n\n", utils.Aqua(highgobase.CommandName()))
 	status.PrettyPrint(os.Stdout, excludedContainers...)
 	return nil
 }
@@ -108,10 +114,19 @@ var (
 
 	//go:embed templates/custom_nginx.template
 	nginxConfigEmbed string
-	// Hardcoded configs which match nginxConfigEmbed
-	nginxEmailTemplateDir   = "/home/kong/templates/email"
+	// Kong runs as a non-root user in the HighgoBase image and /home/kong is not writable.
+	kongHomeDir             = "/tmp/kong"
 	nginxTemplateServerPort = 8088
 )
+
+func kongDBLessPath() string {
+	if highgobase.Enabled() {
+		// Kong 3.9 initialises its DB-less LMDB store relative to the prefix
+		// directory, so the declarative config must live there.
+		return "/usr/local/kong/kong.yml"
+	}
+	return path.Join(kongHomeDir, "kong.yml")
+}
 
 type vectorConfig struct {
 	ApiKey        string
@@ -150,6 +165,13 @@ var (
 )
 
 var serviceTimeout = 30 * time.Second
+
+func localServiceTimeout() time.Duration {
+	if highgobase.Enabled() {
+		return 5 * time.Minute
+	}
+	return serviceTimeout
+}
 
 // RetryClient wraps a Docker client to add retry logic for image pulls
 type RetryClient struct {
@@ -233,8 +255,10 @@ func run(ctx context.Context, fsys afero.Fs, excludedContainers []string, dbConf
 		Name:     "supabase-cli",
 		Services: utils.GetServices().Filter(notExcluded),
 	}
-	if err := pullImagesUsingCompose(ctx, project); err != nil {
-		return err
+	if !highgobase.Enabled() {
+		if err := pullImagesUsingCompose(ctx, project); err != nil {
+			return err
+		}
 	}
 
 	// Start Postgres.
@@ -312,9 +336,9 @@ EOF
 						"http://127.0.0.1:4000/health",
 					},
 					Interval:    10 * time.Second,
-					Timeout:     2 * time.Second,
-					Retries:     3,
-					StartPeriod: 10 * time.Second,
+					Timeout:     10 * time.Second,
+					Retries:     30,
+					StartPeriod: 2 * time.Minute,
 				},
 				ExposedPorts: nat.PortSet{"4000/tcp": {}},
 			},
@@ -400,9 +424,10 @@ EOF
 						"CMD", "wget", "--no-verbose", "--tries=1", "--spider",
 						"http://127.0.0.1:9001/health",
 					},
-					Interval: 10 * time.Second,
-					Timeout:  2 * time.Second,
-					Retries:  3,
+					Interval:    10 * time.Second,
+					Timeout:     5 * time.Second,
+					Retries:     10,
+					StartPeriod: 15 * time.Second,
 				},
 			},
 			container.HostConfig{
@@ -479,7 +504,7 @@ EOF
 					return errors.Errorf("failed to resolve absolute path: %w", err)
 				}
 			}
-			dockerPath := path.Join(nginxEmailTemplateDir, id+filepath.Ext(hostPath))
+			dockerPath := path.Join(kongHomeDir, "templates", "email", id+filepath.Ext(hostPath))
 			binds = append(binds, fmt.Sprintf("%s:%s:rw", hostPath, dockerPath))
 		}
 
@@ -487,15 +512,20 @@ EOF
 		if utils.Config.Api.Tls.Enabled {
 			dockerPort = 8443
 		}
+		dblessConfig := kongDBLessPath()
+		kongEntrypoint := "./docker-entrypoint.sh"
+		if highgobase.Enabled() {
+			kongEntrypoint = "/entrypoint.sh"
+		}
 		if _, err := utils.DockerStart(
 			ctx,
 			container.Config{
 				Image: utils.Config.Api.KongImage,
 				Env: []string{
 					"KONG_DATABASE=off",
-					"KONG_DECLARATIVE_CONFIG=/home/kong/kong.yml",
+					"KONG_DECLARATIVE_CONFIG=" + dblessConfig,
 					"KONG_DNS_ORDER=LAST,A,CNAME", // https://github.com/supabase/cli/issues/14
-					"KONG_PLUGINS=request-transformer,cors",
+					"KONG_PLUGINS=request-transformer,cors,key-auth,acl,basic-auth,post-function",
 					fmt.Sprintf("KONG_PORT_MAPS=%d:8000", utils.Config.Api.Port),
 					// Need to increase the nginx buffers in kong to avoid it rejecting the rather
 					// sizeable response headers azure can generate
@@ -504,14 +534,15 @@ EOF
 					"KONG_NGINX_PROXY_PROXY_BUFFERS=64 160k",
 					"KONG_NGINX_WORKER_PROCESSES=1",
 					// Use modern TLS certificate
-					"KONG_SSL_CERT=/home/kong/localhost.crt",
-					"KONG_SSL_CERT_KEY=/home/kong/localhost.key",
+					"KONG_SSL_CERT=/tmp/kong/localhost.crt",
+					"KONG_SSL_CERT_KEY=/tmp/kong/localhost.key",
 				},
-				Entrypoint: []string{"sh", "-c", `cat <<'EOF' > /home/kong/kong.yml && \
-cat <<'EOF' > /home/kong/custom_nginx.template && \
-cat <<'EOF' > /home/kong/localhost.crt && \
-cat <<'EOF' > /home/kong/localhost.key && \
-./docker-entrypoint.sh kong docker-start --nginx-conf /home/kong/custom_nginx.template
+				Entrypoint: []string{"sh", "-c", `mkdir -p /tmp/kong/templates/email ` + filepath.Dir(dblessConfig) + ` && \
+cat <<'EOF' > ` + dblessConfig + ` && \
+cat <<'EOF' > /tmp/kong/custom_nginx.template && \
+cat <<'EOF' > /tmp/kong/localhost.crt && \
+cat <<'EOF' > /tmp/kong/localhost.key && \
+` + kongEntrypoint + ` kong docker-start --nginx-conf /tmp/kong/custom_nginx.template
 ` + kongConfigBuf.String() + `
 EOF
 ` + nginxConfigEmbed + `
@@ -521,6 +552,13 @@ EOF
 ` + string(utils.Config.Api.Tls.KeyContent) + `
 EOF
 `},
+				Healthcheck: &container.HealthConfig{
+					Test:        []string{"CMD", "kong", "health"},
+					Interval:    5 * time.Second,
+					Timeout:     5 * time.Second,
+					Retries:     20,
+					StartPeriod: 10 * time.Second,
+				},
 				ExposedPorts: nat.PortSet{
 					"8000/tcp": {},
 					"8443/tcp": {},
@@ -828,9 +866,10 @@ EOF
 						"CMD", "wget", "--no-verbose", "--tries=1", "--spider",
 						"http://127.0.0.1:9999/health",
 					},
-					Interval: 10 * time.Second,
-					Timeout:  2 * time.Second,
-					Retries:  3,
+					Interval:    10 * time.Second,
+					Timeout:     5 * time.Second,
+					Retries:     20,
+					StartPeriod: 30 * time.Second,
 				},
 			},
 			container.HostConfig{
@@ -902,6 +941,18 @@ EOF
 
 	// Start Realtime.
 	if utils.Config.Realtime.Enabled && !isContainerExcluded(utils.Config.Realtime.Image, excluded) {
+		realtimeHealthcheck := []string{
+			"CMD", "curl", "-sSfL", "--head", "-o", "/dev/null",
+			"-H", "Host:" + utils.Config.Realtime.TenantId,
+			"http://127.0.0.1:4000/api/ping",
+		}
+		if highgobase.Enabled() {
+			realtimeHealthcheck = []string{
+				"CMD", "curl", "-sSfL", "--head", "-o", "/dev/null",
+				"-H", "Authorization: Bearer " + utils.Config.Auth.AnonKey.Value,
+				"http://127.0.0.1:4000/api/tenants/" + utils.Config.Realtime.TenantId + "/health",
+			}
+		}
 		if _, err := utils.DockerStart(
 			ctx,
 			container.Config{
@@ -930,14 +981,11 @@ EOF
 				ExposedPorts: nat.PortSet{"4000/tcp": {}},
 				Healthcheck: &container.HealthConfig{
 					// Podman splits command by spaces unless it's quoted, but curl header can't be quoted.
-					Test: []string{
-						"CMD", "curl", "-sSfL", "--head", "-o", "/dev/null",
-						"-H", "Host:" + utils.Config.Realtime.TenantId,
-						"http://127.0.0.1:4000/api/ping",
-					},
-					Interval: 10 * time.Second,
-					Timeout:  2 * time.Second,
-					Retries:  3,
+					Test:        realtimeHealthcheck,
+					Interval:    10 * time.Second,
+					Timeout:     10 * time.Second,
+					Retries:     30,
+					StartPeriod: 2 * time.Minute,
 				},
 			},
 			container.HostConfig{
@@ -1029,9 +1077,10 @@ EOF
 						"CMD", "wget", "--no-verbose", "--tries=1", "--spider",
 						"http://127.0.0.1:5000/status",
 					},
-					Interval: 10 * time.Second,
-					Timeout:  2 * time.Second,
-					Retries:  3,
+					Interval:    10 * time.Second,
+					Timeout:     10 * time.Second,
+					Retries:     20,
+					StartPeriod: time.Minute,
 				},
 			},
 			container.HostConfig{
@@ -1118,10 +1167,11 @@ EOF
 					"PG_META_DB_PASSWORD=" + dbConfig.Password,
 				},
 				Healthcheck: &container.HealthConfig{
-					Test:     []string{"CMD-SHELL", `node --eval="fetch('http://127.0.0.1:8080/health').then((r) => {if (!r.ok) throw new Error(r.status)})"`},
-					Interval: 10 * time.Second,
-					Timeout:  2 * time.Second,
-					Retries:  3,
+					Test:        []string{"CMD-SHELL", `node --eval="fetch('http://127.0.0.1:8080/health').then((r) => {if (!r.ok) throw new Error(r.status)})"`},
+					Interval:    10 * time.Second,
+					Timeout:     10 * time.Second,
+					Retries:     20,
+					StartPeriod: time.Minute,
 				},
 			},
 			container.HostConfig{
@@ -1178,10 +1228,11 @@ EOF
 					"POSTGRES_USER_READ_WRITE=postgres",
 				},
 				Healthcheck: &container.HealthConfig{
-					Test:     []string{"CMD-SHELL", `node --eval="fetch('http://127.0.0.1:3000/api/platform/profile').then((r) => {if (!r.ok) throw new Error(r.status)})"`},
-					Interval: 10 * time.Second,
-					Timeout:  2 * time.Second,
-					Retries:  3,
+					Test:        []string{"CMD-SHELL", `node --eval="fetch('http://127.0.0.1:3000/api/platform/profile').then((r) => {if (!r.ok) throw new Error(r.status)})"`},
+					Interval:    10 * time.Second,
+					Timeout:     10 * time.Second,
+					Retries:     20,
+					StartPeriod: time.Minute,
 				},
 			},
 			container.HostConfig{
@@ -1284,7 +1335,11 @@ EOF
 
 	fmt.Fprintln(os.Stderr, "Waiting for health checks...")
 	if utils.NoBackupVolume && slices.Contains(started, utils.StorageId) {
-		if err := start.WaitForHealthyService(ctx, serviceTimeout, utils.StorageId); err != nil {
+		waitFor := []string{utils.StorageId}
+		if slices.Contains(started, utils.KongId) {
+			waitFor = append(waitFor, utils.KongId)
+		}
+		if err := start.WaitForHealthyService(ctx, localServiceTimeout(), waitFor...); err != nil {
 			return err
 		}
 		// Disable prompts when seeding
@@ -1292,7 +1347,7 @@ EOF
 			return err
 		}
 	}
-	return start.WaitForHealthyService(ctx, serviceTimeout, started...)
+	return start.WaitForHealthyService(ctx, localServiceTimeout(), started...)
 }
 
 func isContainerExcluded(imageName string, excluded map[string]bool) bool {

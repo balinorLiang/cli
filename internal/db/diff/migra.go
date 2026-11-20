@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/supabase/cli/internal/gen/types"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/pkg/config"
 	"github.com/supabase/cli/pkg/migration"
@@ -71,7 +72,8 @@ func DiffSchemaMigraBash(ctx context.Context, source, target pgconn.Config, sche
 	}
 	// Passing in script string means command line args must be set manually, ie. "$@"
 	args := "set -- " + strings.Join(schema, " ") + ";"
-	cmd := []string{"/bin/sh", "-c", args + diffSchemaScript}
+	script := strings.ReplaceAll(diffSchemaScript, "\r\n", "\n")
+	cmd := []string{"/bin/sh", "-c", args + script}
 	var out, stderr bytes.Buffer
 	if err := utils.DockerRunOnceWithConfig(
 		ctx,
@@ -100,7 +102,14 @@ func loadSchema(ctx context.Context, config pgconn.Config, options ...func(*pgx.
 	}
 	defer conn.Close(context.Background())
 	// RLS policies in auth and storage schemas can be included with -s flag
-	return migration.ListUserSchemas(ctx, conn)
+	schemas, err := migration.ListUserSchemas(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	if highgobase.Enabled() {
+		schemas = highgobase.FilterUserSchemas(schemas)
+	}
+	return schemas, nil
 }
 
 func DiffSchemaMigra(ctx context.Context, source, target pgconn.Config, schema []string, options ...func(*pgx.ConnConfig)) (string, error) {
@@ -116,7 +125,11 @@ func DiffSchemaMigra(ctx context.Context, source, target pgconn.Config, schema [
 	if len(schema) > 0 {
 		env = append(env, "INCLUDED_SCHEMAS="+strings.Join(schema, ","))
 	} else {
-		env = append(env, "EXCLUDED_SCHEMAS="+strings.Join(managedSchemas, ","))
+		excluded := append([]string{}, managedSchemas...)
+		if highgobase.Enabled() {
+			excluded = append(excluded, highgobase.SystemSchemas...)
+		}
+		env = append(env, "EXCLUDED_SCHEMAS="+strings.Join(excluded, ","))
 	}
 	var out bytes.Buffer
 	if err := diffWithStream(ctx, env, diffSchemaTypeScript, &out); err != nil {

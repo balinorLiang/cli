@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/migration/apply"
 	"github.com/supabase/cli/internal/status"
 	"github.com/supabase/cli/internal/utils"
@@ -60,6 +61,9 @@ func Run(ctx context.Context, fromBackup string, fsys afero.Fs) error {
 }
 
 func NewContainerConfig(args ...string) container.Config {
+	if highgobase.Enabled() {
+		return newHighgoBaseContainerConfig(args...)
+	}
 	env := []string{
 		"POSTGRES_PASSWORD=" + utils.Config.Db.Password,
 		"POSTGRES_HOST=/var/run/postgresql",
@@ -114,10 +118,93 @@ EOF`}
 	return config
 }
 
+func newHighgoBaseContainerConfig(args ...string) container.Config {
+	password := utils.Config.Db.Password
+	env := []string{
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+		"HGDB_PASSWORD=" + password,
+		"HGDB_DB=postgres",
+		"HGDB_INITDB_ARGS=-H postgres -m pg -U highgo",
+		"POSTGRES_HOST=/tmp/",
+		"POSTGRES_PORT=" + highgobase.InitPort,
+		"PGPASSWORD=" + password,
+		"POSTGRES_PASSWORD=" + password,
+		"PGDATABASE=postgres",
+		"POSTGRES_DB=postgres",
+		"POSTGRES_USER=postgres",
+		"PGDATA=" + highgobase.PgDataDir,
+		"JWT_SECRET=" + utils.Config.Auth.JwtSecret.Value,
+		fmt.Sprintf("JWT_EXP=%d", utils.Config.Auth.JwtExpiry),
+		"PGSODIUM_SERVER_SECRET=" + utils.Config.Db.RootKey.Value,
+	}
+	cmd := []string{
+		"postgres",
+		"-c", fmt.Sprintf("port=%d", highgobase.DbPort),
+		"-c", "log_min_messages=fatal",
+		"-c", "shared_preload_libraries=" + highgobase.SharedPreloadLibraries,
+		"-c", "pgsodium.getkey_script=/usr/local/bin/pgsodium_getkey.sh",
+		"-c", "cron.database_name=postgres",
+		"-c", "wal_level=logical",
+		"-c", "max_replication_slots=10",
+		"-c", "max_wal_senders=10",
+	}
+	cmd = append(cmd, postgresSettingsArgs()...)
+	cmd = append(cmd, args...)
+	return container.Config{
+		Image: utils.Config.Db.Image,
+		Env:   env,
+		Cmd:   cmd,
+		Entrypoint: []string{
+			"sh", "-c",
+			`set -e
+mkdir -p /usr/local/bin /home/highgo/license
+rm -rf /docker-entrypoint-initdb.d
+mkdir -p /docker-entrypoint-initdb.d
+tr -d '\r' < /hgbase/docker-entrypoint.hgdb.sh > /usr/local/bin/docker-entrypoint.sh
+tr -d '\r' < /hgbase/pgsodium_getkey.sh > /usr/local/bin/pgsodium_getkey.sh
+tr -d '\r' < /hgbase/pg_hba.conf > /usr/local/bin/pg_hba.conf
+chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/pgsodium_getkey.sh
+cp -a /hgbase/hgdb_init_scripts/. /docker-entrypoint-initdb.d/
+find /docker-entrypoint-initdb.d -type f \( -name '*.sh' -o -name '*.sql' \) -exec sed -i 's/\r$//' {} +
+chmod +x /docker-entrypoint-initdb.d/migrate.sh
+exec /usr/local/bin/docker-entrypoint.sh "$@"`,
+			"--",
+		},
+		Healthcheck: &container.HealthConfig{
+			Test:        []string{"CMD", "pg_isready", "-U", highgobase.DbUser, "-h", "127.0.0.1", "-p", fmt.Sprintf("%d", highgobase.DbPort)},
+			Interval:    5 * time.Second,
+			Timeout:     5 * time.Second,
+			Retries:     10,
+			StartPeriod: 30 * time.Second,
+		},
+	}
+}
+
+func postgresSettingsArgs() []string {
+	var args []string
+	for _, setting := range strings.Split(utils.Config.Db.Settings.ToPostgresConfig(), "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(setting), " = ")
+		if !ok || strings.HasPrefix(key, "#") {
+			continue
+		}
+		args = append(args, "-c", key+"="+strings.Trim(value, "'"))
+	}
+	return args
+}
+
 func NewHostConfig() container.HostConfig {
 	hostPort := strconv.FormatUint(uint64(utils.Config.Db.Port), 10)
+	if highgobase.Enabled() {
+		binds := append([]string{utils.DbId + ":" + highgobase.PgDataDir}, HighgoBaseBinds()...)
+		return container.HostConfig{
+			PortBindings:  nat.PortMap{nat.Port(fmt.Sprintf("%d/tcp", highgobase.DbPort)): []nat.PortBinding{{HostPort: hostPort}}},
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
+			Binds:         binds,
+		}
+	}
 	hostConfig := container.HostConfig{
-		PortBindings:  nat.PortMap{"5432/tcp": []nat.PortBinding{{HostPort: hostPort}}},
+		PortBindings:  nat.PortMap{nat.Port(fmt.Sprintf("%d/tcp", highgobase.DbPort)): []nat.PortBinding{{HostPort: hostPort}}},
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
 		Binds: []string{
 			utils.DbId + ":/var/lib/postgresql/data",
@@ -129,7 +216,27 @@ func NewHostConfig() container.HostConfig {
 	return hostConfig
 }
 
+// HighgoBaseBinds mounts the higobase database assets used to initialize the cluster.
+func HighgoBaseBinds() []string {
+	binds := []string{
+		highgobase.DbAssetsDir() + ":/hgbase:ro",
+	}
+	if dir, ok := highgobase.LicenseDir(); ok {
+		// The entrypoint copies the license into this directory on first boot.
+		binds = append(binds, dir+":/home/highgo/license")
+	}
+	return binds
+}
+
 func StartDatabase(ctx context.Context, fromBackup string, fsys afero.Fs, w io.Writer, options ...func(*pgx.ConnConfig)) error {
+	if highgobase.Enabled() {
+		if err := highgobase.ValidateHome(); err != nil {
+			return err
+		}
+		if len(fromBackup) > 0 {
+			return errors.New("starting from a backup is not supported by the HighgoBase runtime")
+		}
+	}
 	config := NewContainerConfig()
 	hostConfig := NewHostConfig()
 	networkingConfig := network.NetworkingConfig{
@@ -356,6 +463,9 @@ func initSchema15(ctx context.Context, host string) error {
 }
 
 func SetupLocalDatabase(ctx context.Context, version string, fsys afero.Fs, w io.Writer, options ...func(*pgx.ConnConfig)) error {
+	if highgobase.Enabled() {
+		return setupHighgoBaseDatabase(ctx, version, fsys, w, options...)
+	}
 	conn, err := utils.ConnectLocalPostgres(ctx, pgconn.Config{}, options...)
 	if err != nil {
 		return err
@@ -367,7 +477,27 @@ func SetupLocalDatabase(ctx context.Context, version string, fsys afero.Fs, w io
 	return apply.MigrateAndSeed(ctx, version, conn, fsys)
 }
 
+func setupHighgoBaseDatabase(ctx context.Context, version string, fsys afero.Fs, w io.Writer, options ...func(*pgx.ConnConfig)) error {
+	conn, err := utils.ConnectLocalPostgres(ctx, pgconn.Config{}, options...)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(context.Background())
+	if err := vault.UpsertVaultSecrets(ctx, utils.Config.Db.Vault, conn); err != nil {
+		return err
+	}
+	err = migration.SeedGlobals(ctx, []string{utils.CustomRolesPath}, conn, afero.NewIOFS(fsys))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return apply.MigrateAndSeed(ctx, version, conn, fsys)
+}
+
 func SetupDatabase(ctx context.Context, conn *pgx.Conn, host string, w io.Writer, fsys afero.Fs) error {
+	if highgobase.Enabled() {
+		// HighgoBase installs its schemas from the init scripts at container start.
+		return nil
+	}
 	if err := initSchema(ctx, conn, host, w); err != nil {
 		return err
 	}

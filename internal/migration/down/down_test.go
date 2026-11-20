@@ -91,7 +91,9 @@ func TestResetRemote(t *testing.T) {
 			Query("RESET ALL").
 			Reply("RESET").
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "schema", nil).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		// Run test
 		err := ResetAll(context.Background(), "", conn.MockClient(t), fsys)
 		// Check error
@@ -115,7 +117,9 @@ func TestResetRemote(t *testing.T) {
 			Query("RESET ALL").
 			Reply("RESET").
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "schema", nil).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		utils.Config.Db.Seed.Enabled = false
 		// Run test
 		err := ResetAll(context.Background(), "", conn.MockClient(t), fsys)

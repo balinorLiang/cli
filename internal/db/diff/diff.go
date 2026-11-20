@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
 	"github.com/supabase/cli/internal/db/start"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/migration/new"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/pkg/migration"
@@ -108,15 +109,21 @@ func findDropStatements(out string) []string {
 }
 
 func CreateShadowDatabase(ctx context.Context, port uint16) (string, error) {
+	if highgobase.Enabled() {
+		if err := highgobase.ValidateHome(); err != nil {
+			return "", err
+		}
+	}
 	// Disable background workers in shadow database
 	config := start.NewContainerConfig("-c", "max_worker_processes=0")
 	hostPort := strconv.FormatUint(uint64(port), 10)
 	hostConfig := container.HostConfig{
 		PortBindings: nat.PortMap{"5432/tcp": []nat.PortBinding{{HostPort: hostPort}}},
-		AutoRemove:   true,
 	}
 	networkingConfig := network.NetworkingConfig{}
-	if utils.Config.Db.MajorVersion <= 14 {
+	if highgobase.Enabled() {
+		hostConfig.Binds = start.HighgoBaseBinds()
+	} else if utils.Config.Db.MajorVersion <= 14 {
 		hostConfig.Tmpfs = map[string]string{"/docker-entrypoint-initdb.d": ""}
 	}
 	return utils.DockerStart(ctx, config, hostConfig, networkingConfig, "")

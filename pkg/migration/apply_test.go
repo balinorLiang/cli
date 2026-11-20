@@ -113,7 +113,9 @@ func TestApplyMigrations(t *testing.T) {
 			Query(testSchema).
 			Reply("CREATE SCHEMA").
 			Query(INSERT_MIGRATION_VERSION, "0", "schema", []string{testSchema}).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		// Run test
 		err := ApplyMigrations(context.Background(), pending, conn.MockClient(t), testMigrations)
 		// Check error

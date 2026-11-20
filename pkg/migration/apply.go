@@ -73,5 +73,10 @@ func ApplyMigrations(ctx context.Context, pending []string, conn *pgx.Conn, fsys
 			return err
 		}
 	}
+	if len(pending) > 0 {
+		if _, err := conn.Exec(ctx, "NOTIFY pgrst, 'reload schema'"); err != nil {
+			return errors.Errorf("failed to reload PostgREST schema cache: %w", err)
+		}
+	}
 	return nil
 }

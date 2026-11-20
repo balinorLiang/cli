@@ -9,6 +9,8 @@ begin
     where pd.deptype is null
       and not pn.nspname like any(array['information\_schema', 'pg\_%', '\_analytics', '\_realtime', '\_supavisor', 'pgbouncer', 'pgmq', 'pgsodium', 'pgtle', 'supabase\_migrations', 'vault', 'extensions', 'public'])
       and pn.nspowner::regrole::text != 'supabase_admin'
+      and pg_has_role(current_user, pn.nspowner, 'USAGE')
+      and pn.nspname not like any(array['hg\_%', 'sys', 'pgagent', 'credcheck', 'paradedb'])
   loop
     -- If an extension uses a schema it doesn't create, dropping the schema will cascade to also
     -- drop the extension. But if an extension creates its own schema, dropping the schema will
@@ -22,6 +24,7 @@ begin
     select *
     from pg_extension p
     where p.extname not in ('pg_graphql', 'pg_net', 'pg_stat_statements', 'pgcrypto', 'pgjwt', 'pgsodium', 'plpgsql', 'supabase_vault', 'uuid-ossp')
+      and pg_has_role(current_user, p.extowner, 'USAGE')
   loop
     raise notice 'dropping extension: %', rec.extname;
     execute format('drop extension if exists %I cascade', rec.extname);
@@ -32,6 +35,7 @@ begin
     select *
     from pg_proc p
     where p.pronamespace::regnamespace::name = 'public'
+      and pg_has_role(current_user, p.proowner, 'USAGE')
   loop
     -- supports aggregate, function, and procedure
     raise notice 'dropping function: %.%', rec.pronamespace::regnamespace::name, rec.proname;
@@ -45,6 +49,7 @@ begin
     where
       c.relnamespace::regnamespace::name = 'public'
       and c.relkind = 'v'
+      and pg_has_role(current_user, c.relowner, 'USAGE')
   loop
     raise notice 'dropping view: %.%', rec.relnamespace::regnamespace::name, rec.relname;
     execute format('drop view if exists %I.%I cascade', rec.relnamespace::regnamespace::name, rec.relname);
@@ -57,6 +62,7 @@ begin
     where
       c.relnamespace::regnamespace::name = 'public'
       and c.relkind = 'm'
+      and pg_has_role(current_user, c.relowner, 'USAGE')
   loop
     raise notice 'dropping materialized view: %.%', rec.relnamespace::regnamespace::name, rec.relname;
     execute format('drop materialized view if exists %I.%I cascade', rec.relnamespace::regnamespace::name, rec.relname);
@@ -69,6 +75,7 @@ begin
     where
       c.relnamespace::regnamespace::name = 'public'
       and c.relkind not in ('c', 'S', 'v', 'm')
+      and pg_has_role(current_user, c.relowner, 'USAGE')
     order by c.relkind desc
   loop
     -- supports all table like relations, except views, complex types, and sequences
@@ -85,6 +92,7 @@ begin
       or c.relnamespace::regnamespace::name = 'supabase_functions' and c.relname != 'migrations'
       or c.relnamespace::regnamespace::name = 'supabase_migrations')
       and c.relkind = 'r'
+      and pg_has_role(current_user, c.relowner, 'USAGE')
   loop
     raise notice 'truncating table: %.%', rec.relnamespace::regnamespace::name, rec.relname;
     execute format('truncate %I.%I cascade', rec.relnamespace::regnamespace::name, rec.relname);
@@ -97,6 +105,7 @@ begin
     where
       c.relnamespace::regnamespace::name = 'public'
       and c.relkind = 's'
+      and pg_has_role(current_user, c.relowner, 'USAGE')
   loop
     raise notice 'dropping sequence: %.%', rec.relnamespace::regnamespace::name, rec.relname;
     execute format('drop sequence if exists %I.%I cascade', rec.relnamespace::regnamespace::name, rec.relname);
@@ -109,6 +118,7 @@ begin
     where
       t.typnamespace::regnamespace::name = 'public'
       and typtype != 'b'
+      and pg_has_role(current_user, t.typowner, 'USAGE')
   loop
     raise notice 'dropping type: %.%', rec.typnamespace::regnamespace::name, rec.typname;
     execute format('drop type if exists %I.%I cascade', rec.typnamespace::regnamespace::name, rec.typname);
@@ -116,8 +126,11 @@ begin
 
   -- policies
   for rec in
-    select *
+    select p.*
     from pg_policies p
+    join pg_namespace n on n.nspname = p.schemaname
+    join pg_class c on c.relnamespace = n.oid and c.relname = p.tablename
+    where pg_has_role(current_user, c.relowner, 'USAGE')
   loop
     raise notice 'dropping policy: %', rec.policyname;
     execute format('drop policy if exists %I on %I.%I cascade', rec.policyname, rec.schemaname, rec.tablename);
@@ -129,6 +142,7 @@ begin
     from pg_publication p
     where
       not p.pubname like any(array['supabase\_realtime%', 'realtime\_messages%'])
+      and pg_has_role(current_user, p.pubowner, 'USAGE')
   loop
     raise notice 'dropping publication: %', rec.pubname;
     execute format('drop publication if exists %I', rec.pubname);

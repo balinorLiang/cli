@@ -93,7 +93,9 @@ func TestSquashCommand(t *testing.T) {
 			Query("RESET ALL").
 			Reply("RESET").
 			Query(migration.INSERT_MIGRATION_VERSION, "1", "target", nil).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		// Run test
 		err := Run(context.Background(), "", pgconn.Config{
 			Host: "127.0.0.1",
@@ -316,7 +318,9 @@ func TestSquashMigrations(t *testing.T) {
 			Query(sql).
 			Reply("CREATE SCHEMA").
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "init", []string{sql}).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		// Run test
 		err := squashMigrations(context.Background(), []string{path}, afero.NewReadOnlyFs(fsys), conn.Intercept)
 		// Check error

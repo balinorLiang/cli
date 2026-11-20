@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/supabase/cli/internal/debug"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/internal/utils/flags"
 	"golang.org/x/mod/semver"
@@ -136,20 +137,36 @@ var (
 
 func Execute() {
 	defer recoverAndExit()
+	configureDistribution()
 	if err := rootCmd.Execute(); err != nil {
 		panic(err)
 	}
 	// Check upgrade last because --version flag is initialised after execute
-	version, err := checkUpgrade(rootCmd.Context(), afero.NewOsFs())
-	if err != nil {
-		fmt.Fprintln(utils.GetDebugLogger(), err)
-	}
-	if semver.Compare(version, "v"+utils.Version) > 0 {
-		fmt.Fprintln(os.Stderr, suggestUpgrade(version))
+	if !highgobase.Enabled() {
+		version, err := checkUpgrade(rootCmd.Context(), afero.NewOsFs())
+		if err != nil {
+			fmt.Fprintln(utils.GetDebugLogger(), err)
+		}
+		if semver.Compare(version, "v"+utils.Version) > 0 {
+			fmt.Fprintln(os.Stderr, suggestUpgrade(version))
+		}
 	}
 	if len(utils.CmdSuggestion) > 0 {
 		fmt.Fprintln(os.Stderr, utils.CmdSuggestion)
 	}
+}
+
+func configureDistribution() {
+	if !highgobase.Enabled() {
+		return
+	}
+	if len(utils.Version) == 0 {
+		utils.Version = highgobase.Version
+	}
+	rootCmd.Use = highgobase.CommandName()
+	rootCmd.Aliases = []string{"supabase"}
+	rootCmd.Short = "HighgoBase CLI " + utils.Version
+	rootCmd.Version = utils.Version
 }
 
 func checkUpgrade(ctx context.Context, fsys afero.Fs) (string, error) {

@@ -21,6 +21,7 @@ import (
 	"github.com/olekukonko/tablewriter"
 	"github.com/olekukonko/tablewriter/tw"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/internal/utils/flags"
 	"github.com/supabase/cli/pkg/fetcher"
@@ -109,7 +110,7 @@ func Run(ctx context.Context, names CustomName, format string, fsys afero.Fs) er
 		fmt.Fprintln(os.Stderr, "Stopped services:", stopped)
 	}
 	if format == utils.OutputPretty {
-		fmt.Fprintf(os.Stderr, "%s local development setup is running.\n\n", utils.Aqua("supabase"))
+		fmt.Fprintf(os.Stderr, "%s local development setup is running.\n\n", utils.Aqua(highgobase.CommandName()))
 		PrettyPrint(os.Stdout, stopped...)
 		return nil
 	}

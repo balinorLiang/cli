@@ -32,7 +32,9 @@ func TestMigrateDatabase(t *testing.T) {
 			Query(sql).
 			Reply("CREATE SCHEMA").
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		// Run test
 		err := MigrateAndSeed(context.Background(), "", conn.MockClient(t), fsys)
 		// Check error
@@ -57,7 +59,9 @@ func TestMigrateDatabase(t *testing.T) {
 			Query(sql).
 			Reply("CREATE SCHEMA").
 			Query(migration.INSERT_MIGRATION_VERSION, "0", "test", []string{sql}).
-			Reply("INSERT 0 1")
+			Reply("INSERT 0 1").
+			Query("NOTIFY pgrst, 'reload schema'").
+			Reply("NOTIFY")
 		utils.Config.Db.Seed.Enabled = false
 		// Run test
 		err := MigrateAndSeed(context.Background(), "", conn.MockClient(t), fsys)

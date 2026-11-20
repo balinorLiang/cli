@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v4"
 	"github.com/spf13/afero"
+	"github.com/supabase/cli/internal/highgobase"
 	"github.com/supabase/cli/internal/utils"
 	"github.com/supabase/cli/pkg/migration"
 )
@@ -114,6 +115,9 @@ func LintDatabase(ctx context.Context, conn *pgx.Conn, schema []string) ([]Resul
 		schema, err = migration.ListUserSchemas(ctx, conn)
 		if err != nil {
 			return nil, err
+		}
+		if highgobase.Enabled() {
+			schema = highgobase.FilterUserSchemas(schema)
 		}
 	}
 	// Always rollback since lint should not have side effects
